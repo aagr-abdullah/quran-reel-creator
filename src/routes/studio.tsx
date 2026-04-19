@@ -293,7 +293,7 @@ function StudioPage() {
 
           {/* Step 2 — detect */}
           {phase !== "idle" && (
-            <Card step={2} title="Confirm verses" done={phase === "ready" || phase === "analyzing" || phase === "generating" || phase === "preview" || phase === "exporting"}>
+            <Card step={2} title="Confirm verses" done={phase === "ready" || phase === "analyzing" || phase === "generating" || phase === "preview" || phase === "rendering" || phase === "rendered"}>
               {phase === "detecting" && <Loading text={progress} />}
               {transcription && (
                 <details className="mb-4 rounded-lg border border-border/40 bg-parchment-deep/30 p-3 text-sm">
