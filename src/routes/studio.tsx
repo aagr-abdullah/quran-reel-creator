@@ -8,6 +8,7 @@ import { detectVerses, fetchVerses, type AyahPayload } from "@/server/detect.fun
 import { detectMaqam, analyzeVerseMeaning } from "@/server/maqam.functions";
 import { directReel } from "@/server/director.functions";
 import { shapeAyahs } from "@/server/calligraphy.functions";
+import { alignWords } from "@/server/align.functions";
 import { generateSubstrate, generateAyahBackground } from "@/server/assets.functions";
 import { renderReel as renderReelFn, getRenderProgress } from "@/server/render.functions";
 import { SURAHS, getSurah } from "@/lib/surahs";
@@ -53,6 +54,7 @@ function StudioPage() {
   const analyzeFn = useServerFn(analyzeVerseMeaning);
   const directFn = useServerFn(directReel);
   const shapeFn = useServerFn(shapeAyahs);
+  const alignFn = useServerFn(alignWords);
   const substrateFn = useServerFn(generateSubstrate);
   const bgFn = useServerFn(generateAyahBackground);
   const renderFn = useServerFn(renderReelFn);
