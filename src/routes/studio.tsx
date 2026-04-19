@@ -226,41 +226,45 @@ function StudioPage() {
     }
   }, [reelId, audioUrl, verses, style, maqamFn, analyzeFn, substrateFn, bgFn]);
 
-  const onExport = useCallback(async () => {
-    if (!playerWrapRef.current || !reelData) return;
-    setPhase("exporting");
-    setExportProgress(0);
+  const onRender = useCallback(async () => {
+    if (!reelId || !reelData) return;
+    setPhase("rendering");
+    setRenderProgress(0);
+    setRenderError(null);
+    setVideoUrl(null);
     try {
-      // Find the audio element inside Remotion Player
-      const audioEl = playerWrapRef.current.querySelector("audio") as HTMLAudioElement | null;
-      if (!audioEl) {
-        toast.error("Could not locate audio for export. Press Play first.");
-        setPhase("preview");
-        return;
+      const { renderId, bucketName } = await renderFn({ data: { reelId, data: reelData } });
+      toast.message("Render queued on Lambda…", { description: "This usually takes 30–90s." });
+
+      // Poll progress every 2s
+      const pollEveryMs = 2000;
+      const start = Date.now();
+      const timeoutMs = 10 * 60 * 1000; // 10 min safety
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        if (Date.now() - start > timeoutMs) throw new Error("Render timed out");
+        await new Promise((r) => setTimeout(r, pollEveryMs));
+        const p = await progressFn({ data: { reelId, renderId, bucketName } });
+        setRenderProgress(p.progress);
+        if (p.error) {
+          setRenderError(p.error);
+          throw new Error(p.error);
+        }
+        if (p.done && p.videoUrl) {
+          setVideoUrl(p.videoUrl);
+          setPhase("rendered");
+          toast.success("Reel rendered — your MP4 is ready");
+          return;
+        }
       }
-      playerRef.current?.seekTo(0);
-      playerRef.current?.play();
-      const blob = await captureReel({
-        player: playerWrapRef.current,
-        audio: audioEl,
-        durationMs: (totalFrames / REEL_FPS) * 1000,
-        fps: REEL_FPS,
-        onProgress: (f) => setExportProgress(f),
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `quran-reel-${reelId}.webm`;
-      a.click();
-      URL.revokeObjectURL(url);
-      toast.success("Reel saved");
-      setPhase("preview");
     } catch (e) {
       console.error(e);
-      toast.error(e instanceof Error ? e.message : "Export failed");
+      const msg = e instanceof Error ? e.message : "Render failed";
+      setRenderError(msg);
+      toast.error(msg);
       setPhase("preview");
     }
-  }, [reelData, totalFrames, reelId]);
+  }, [reelId, reelData, renderFn, progressFn]);
 
   const surahMeta = getSurah(chosenSurah);
 
