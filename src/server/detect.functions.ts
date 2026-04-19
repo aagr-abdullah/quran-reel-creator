@@ -32,6 +32,7 @@ export const detectVerses = createServerFn({ method: "POST" })
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "google/gemini-2.5-pro",
+        max_completion_tokens: 2048,
         messages: [
           {
             role: "user",
@@ -44,13 +45,26 @@ export const detectVerses = createServerFn({ method: "POST" })
       }),
     });
 
+    const aiText = await aiRes.text();
     if (!aiRes.ok) {
-      const t = await aiRes.text();
-      throw new Error(`Transcription failed (${aiRes.status}): ${t.slice(0, 200)}`);
+      throw new Error(`Transcription failed (${aiRes.status}): ${aiText.slice(0, 300) || "<empty body>"}`);
     }
-    const aiJson = await aiRes.json();
+    if (!aiText.trim()) {
+      throw new Error("Transcription returned empty body from AI gateway");
+    }
+    let aiJson: any;
+    try {
+      aiJson = JSON.parse(aiText);
+    } catch {
+      throw new Error(`Transcription returned non-JSON: ${aiText.slice(0, 300)}`);
+    }
+    const finishReason = aiJson.choices?.[0]?.finish_reason;
     const transcription: string = aiJson.choices?.[0]?.message?.content ?? "";
-    if (!transcription.trim()) throw new Error("Empty transcription");
+    if (!transcription.trim()) {
+      throw new Error(
+        `Empty transcription (finish_reason=${finishReason ?? "unknown"}). The audio may be too long, silent, or unsupported.`
+      );
+    }
 
     const normalized = normalizeArabic(transcription);
     const tokens = tokenizeArabic(transcription);
@@ -64,6 +78,7 @@ export const detectVerses = createServerFn({ method: "POST" })
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "google/gemini-2.5-flash",
+        max_completion_tokens: 256,
         messages: [
           {
             role: "user",
@@ -74,13 +89,20 @@ export const detectVerses = createServerFn({ method: "POST" })
     });
     let candidateSurahs: number[] = [];
     if (seedRes.ok) {
-      const seedJson = await seedRes.json();
-      const raw: string = seedJson.choices?.[0]?.message?.content ?? "[]";
-      const m = raw.match(/\[[\s\d,]+\]/);
-      if (m) {
-        try {
-          candidateSurahs = JSON.parse(m[0]).filter((n: unknown) => typeof n === "number" && n >= 1 && n <= 114);
-        } catch {}
+      const seedText = await seedRes.text();
+      try {
+        const seedJson = JSON.parse(seedText);
+        const raw: string = seedJson.choices?.[0]?.message?.content ?? "[]";
+        const m = raw.match(/\[[\s\d,]+\]/);
+        if (m) {
+          try {
+            candidateSurahs = JSON.parse(m[0]).filter(
+              (n: unknown) => typeof n === "number" && n >= 1 && n <= 114
+            );
+          } catch {}
+        }
+      } catch {
+        console.error("Seed step returned non-JSON, using fallback surahs");
       }
     }
     if (candidateSurahs.length === 0) candidateSurahs = [1, 2, 36, 55, 67, 112];
