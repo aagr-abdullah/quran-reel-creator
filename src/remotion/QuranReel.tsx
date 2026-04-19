@@ -29,6 +29,10 @@ export interface ShapedWord {
   width: number;
   text: string;
   glyphCount: number;
+  /** Optional precomputed start frame (from Gemini alignment), relative to scene start */
+  startFrame?: number;
+  /** Optional precomputed end frame (from Gemini alignment), relative to scene start */
+  endFrame?: number;
 }
 
 export interface ShapedAyahData {
@@ -69,9 +73,24 @@ export function totalDurationFrames(ayahs: AyahData[]): number {
   return Math.max(60, ayahs.reduce((s, a) => s + a.durationFrames, 0) + 36);
 }
 
-/** Char-weighted word timing — longer words hold longer. */
-function wordFrameOffsets(words: ShapedWord[], sceneFrames: number): number[] {
-  const safeFrames = Math.max(1, sceneFrames - 12); // reserve tail
+/**
+ * Per-word timing. Uses precomputed startFrame from Gemini alignment when
+ * available; falls back to char-weighted distribution.
+ */
+function wordFrameTiming(words: ShapedWord[], sceneFrames: number): { offsets: number[]; durations: number[] } {
+  const haveAlignment = words.length > 0 && words.every((w) => typeof w.startFrame === "number" && typeof w.endFrame === "number");
+  if (haveAlignment) {
+    const offsets = words.map((w) => Math.max(0, w.startFrame!));
+    const durations = words.map((w, i) => {
+      const end = w.endFrame!;
+      const nextStart = offsets[i + 1] ?? sceneFrames;
+      // honor measured end but never run past the next word
+      return Math.max(6, Math.min(end, nextStart) - offsets[i]);
+    });
+    return { offsets, durations };
+  }
+  // Fallback: char-weighted
+  const safeFrames = Math.max(1, sceneFrames - 12);
   const totalChars = words.reduce((s, w) => s + Math.max(1, w.text.length), 0);
   let cursor = 0;
   const offsets: number[] = [];
@@ -79,7 +98,8 @@ function wordFrameOffsets(words: ShapedWord[], sceneFrames: number): number[] {
     offsets.push(cursor);
     cursor += Math.max(8, Math.round(safeFrames * (Math.max(1, w.text.length) / totalChars)));
   }
-  return offsets;
+  const durations = offsets.map((o, i) => (offsets[i + 1] ?? sceneFrames - 12) - o);
+  return { offsets, durations };
 }
 
 export function QuranReel({ data }: { data: ReelData }) {
