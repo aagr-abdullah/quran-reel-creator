@@ -193,6 +193,53 @@ function StudioPage() {
       const shapeRes = await shapeFn({ data: { ayahs: verses.map((v) => ({ number: v.numberInSurah, arabic: v.arabic })) } });
       const shapedMap: Record<number, ShapedAyahData> = {};
       for (const s of shapeRes.shaped) shapedMap[s.ayahNumber] = s;
+
+      // Word-level audio alignment (Gemini). Best-effort — falls back to char-weighted.
+      setProgress("Aligning each word to your voice…");
+      try {
+        const alignRes = await alignFn({
+          data: {
+            audioUrl,
+            durationSec: audioDuration,
+            ayahs: shapeRes.shaped.map((s) => ({ number: s.ayahNumber, words: s.words.map((w) => w.text) })),
+          },
+        });
+        // Total scene duration in frames per ayah (proportional to char count, mirrors reelData logic)
+        const totalChars = verses.reduce((s, v) => s + Math.max(1, v.arabic.length), 0);
+        const totalAyahFrames = Math.max(60, Math.round(audioDuration * REEL_FPS));
+        // Build cumulative ayah start times in seconds (mirroring frame allocation)
+        let cumSec = 0;
+        const ayahStartSec = new Map<number, number>();
+        const ayahDurSec = new Map<number, number>();
+        for (const v of verses) {
+          const frames = Math.max(45, Math.round((v.arabic.length / totalChars) * totalAyahFrames));
+          const sec = frames / REEL_FPS;
+          ayahStartSec.set(v.numberInSurah, cumSec);
+          ayahDurSec.set(v.numberInSurah, sec);
+          cumSec += sec;
+        }
+        for (const ay of alignRes.aligned) {
+          const target = shapedMap[ay.ayah];
+          if (!target) continue;
+          const sceneStart = ayahStartSec.get(ay.ayah) ?? 0;
+          const sceneDurFrames = Math.round((ayahDurSec.get(ay.ayah) ?? 0) * REEL_FPS);
+          // Match aligned words to shaped words by index (both in recitation order)
+          const next = target.words.map((w, i) => {
+            const m = ay.words[i];
+            if (!m) return w;
+            const startFrame = Math.max(0, Math.round((m.startSec - sceneStart) * REEL_FPS));
+            const endFrame = Math.max(startFrame + 6, Math.round((m.endSec - sceneStart) * REEL_FPS));
+            return {
+              ...w,
+              startFrame: Math.min(startFrame, sceneDurFrames - 6),
+              endFrame: Math.min(endFrame, sceneDurFrames),
+            };
+          });
+          shapedMap[ay.ayah] = { ...target, words: next };
+        }
+      } catch (e) {
+        console.warn("[align] skipped:", e);
+      }
       setShapedByNum(shapedMap);
 
       setPhase("directing");
@@ -259,7 +306,7 @@ function StudioPage() {
       setPhase("ready");
       setProgress("");
     }
-  }, [reelId, audioUrl, audioDuration, verses, chosenSurah, maqamFn, analyzeFn, shapeFn, directFn, substrateFn, bgFn]);
+  }, [reelId, audioUrl, audioDuration, verses, chosenSurah, maqamFn, analyzeFn, shapeFn, alignFn, directFn, substrateFn, bgFn]);
 
   const onRedirect = useCallback(async () => {
     if (!reelId || !maqam || verses.length === 0 || !audioDuration) return;
