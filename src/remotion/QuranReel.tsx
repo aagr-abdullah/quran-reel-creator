@@ -29,6 +29,10 @@ export interface ShapedWord {
   width: number;
   text: string;
   glyphCount: number;
+  /** Optional precomputed start frame (from Gemini alignment), relative to scene start */
+  startFrame?: number;
+  /** Optional precomputed end frame (from Gemini alignment), relative to scene start */
+  endFrame?: number;
 }
 
 export interface ShapedAyahData {
@@ -69,9 +73,24 @@ export function totalDurationFrames(ayahs: AyahData[]): number {
   return Math.max(60, ayahs.reduce((s, a) => s + a.durationFrames, 0) + 36);
 }
 
-/** Char-weighted word timing — longer words hold longer. */
-function wordFrameOffsets(words: ShapedWord[], sceneFrames: number): number[] {
-  const safeFrames = Math.max(1, sceneFrames - 12); // reserve tail
+/**
+ * Per-word timing. Uses precomputed startFrame from Gemini alignment when
+ * available; falls back to char-weighted distribution.
+ */
+function wordFrameTiming(words: ShapedWord[], sceneFrames: number): { offsets: number[]; durations: number[] } {
+  const haveAlignment = words.length > 0 && words.every((w) => typeof w.startFrame === "number" && typeof w.endFrame === "number");
+  if (haveAlignment) {
+    const offsets = words.map((w) => Math.max(0, w.startFrame!));
+    const durations = words.map((w, i) => {
+      const end = w.endFrame!;
+      const nextStart = offsets[i + 1] ?? sceneFrames;
+      // honor measured end but never run past the next word
+      return Math.max(6, Math.min(end, nextStart) - offsets[i]);
+    });
+    return { offsets, durations };
+  }
+  // Fallback: char-weighted
+  const safeFrames = Math.max(1, sceneFrames - 12);
   const totalChars = words.reduce((s, w) => s + Math.max(1, w.text.length), 0);
   let cursor = 0;
   const offsets: number[] = [];
@@ -79,7 +98,8 @@ function wordFrameOffsets(words: ShapedWord[], sceneFrames: number): number[] {
     offsets.push(cursor);
     cursor += Math.max(8, Math.round(safeFrames * (Math.max(1, w.text.length) / totalChars)));
   }
-  return offsets;
+  const durations = offsets.map((o, i) => (offsets[i + 1] ?? sceneFrames - 12) - o);
+  return { offsets, durations };
 }
 
 export function QuranReel({ data }: { data: ReelData }) {
@@ -157,9 +177,9 @@ export function QuranReel({ data }: { data: ReelData }) {
       {/* Subtle film grain (SVG noise) */}
       <FilmGrain frame={frame} />
 
-      {/* Surah chip — small corner overlay during first 60 frames only */}
+      {/* Surah chip — small Latin-only corner overlay during first 72 frames */}
       <Sequence from={0} durationInFrames={72}>
-        <SurahChip brief={brief} surahName={data.surahName} surahNameEnglish={data.surahNameEnglish} ayahStart={data.ayahStart} ayahEnd={data.ayahEnd} />
+        <SurahChip brief={brief} surahNameEnglish={data.surahNameEnglish} ayahStart={data.ayahStart} ayahEnd={data.ayahEnd} />
       </Sequence>
 
       {/* Endcard — final 36 frames */}
@@ -219,10 +239,11 @@ function AyahScene({ ayah, brief, amplitude }: { ayah: AyahData; brief: Creative
   const exit = interpolate(frame, [durationInFrames - 18, durationInFrames], [1, 0], { extrapolateLeft: "clamp" });
   const op = Math.min(enter, exit);
 
-  // Per-word offsets from char-weighted timing
+  // Per-word timing — uses Gemini alignment when present, char-weighted otherwise
   const words = ayah.shaped?.words ?? [];
-  const offsets = words.length ? wordFrameOffsets(words, durationInFrames) : [];
-  const wordDurations = offsets.map((o, i) => (offsets[i + 1] ?? durationInFrames - 12) - o);
+  const { offsets, durations: wordDurations } = words.length
+    ? wordFrameTiming(words, durationInFrames)
+    : { offsets: [] as number[], durations: [] as number[] };
 
   // Translation always visible, fades in over 14 frames
   const transOp = interpolate(frame, [0, 14], [0, 1], { extrapolateRight: "clamp" });
@@ -265,14 +286,15 @@ function AyahScene({ ayah, brief, amplitude }: { ayah: AyahData; brief: Creative
         <div style={{ height: 1, width: 160, background: `linear-gradient(90deg, transparent, ${palette.accent}, transparent)` }} />
       </div>
 
-      {/* Stroke-write calligraphy — SVG */}
+      {/* Stroke-write calligraphy — SVG with HTML fallback */}
       {ayah.shaped && words.length > 0 && (
-        <CalligraphySVG
+        <CalligraphyLayer
           shaped={ayah.shaped}
           offsets={offsets}
           wordDurations={wordDurations}
           frame={frame}
           palette={palette}
+          amplitude={amplitude}
         />
       )}
 
@@ -310,41 +332,58 @@ function AyahScene({ ayah, brief, amplitude }: { ayah: AyahData; brief: Creative
 }
 
 /**
- * Per-word stroke-by-stroke writing animation using SVG strokeDashoffset.
- * Each word is rendered as an SVG <path>; we ramp its dashoffset from
- * approxLength → 0 over the word's frame window. The word also gets a
- * filled "echo" that fades in at 70% to make the calligraphy feel solid.
+ * Per-word stroke-by-stroke writing animation.
+ * Tries SVG paths first; falls back to HTML+webfont per-letter fade if path
+ * data is invalid (empty paths, suspicious viewBox, zero widths).
  */
-function CalligraphySVG({
+function CalligraphyLayer({
   shaped,
   offsets,
   wordDurations,
   frame,
   palette,
+  amplitude,
 }: {
   shaped: ShapedAyahData;
   offsets: number[];
   wordDurations: number[];
   frame: number;
   palette: CreativeBrief["palette"];
+  amplitude: number;
 }) {
-  // The font path coords have y-up. opentype draws baseline at y=0 with
-  // negative y going up — so glyphs appear ABOVE the baseline.
-  // We need a viewBox that includes the ascender-to-descender range.
+  const words = shaped.words;
   const ascender = shaped.ascender;
   const descender = shaped.descender;
-  const totalH = ascender - descender; // descender is negative
-  const words = shaped.words;
-
-  // Lay words right-to-left across viewBox. Total width is sum of widths;
-  // position cursor from the right edge.
+  const totalH = ascender - descender;
   const totalW = shaped.totalWidth;
-  // padding so strokes don't clip
+
+  // Safety guards: detect bad SVG geometry → fall back to HTML
+  const svgInvalid =
+    totalW <= 0 ||
+    totalH <= 0 ||
+    totalH > 5000 ||
+    words.some((w) => !w.pathD || w.pathD.length < 4 || w.width <= 0);
+
+  if (svgInvalid) {
+    if (typeof window !== "undefined") {
+      console.warn("[CalligraphyLayer] SVG paths invalid, using HTML fallback", { totalW, totalH, words: words.length });
+    }
+    return (
+      <CalligraphyHTMLFallback
+        words={words}
+        offsets={offsets}
+        wordDurations={wordDurations}
+        frame={frame}
+        palette={palette}
+        amplitude={amplitude}
+      />
+    );
+  }
+
+  // Lay words right-to-left across viewBox.
   const pad = totalH * 0.15;
   const vbW = totalW + pad * 2;
   const vbH = totalH + pad * 2;
-  // Compose word positions: cursor starts at (totalW), each word occupies
-  // [cursor - width, cursor] then cursor -= width.
   let cursor = totalW;
   const wordX: number[] = words.map((w) => {
     const left = cursor - w.width;
@@ -352,28 +391,23 @@ function CalligraphySVG({
     return left;
   });
 
-  // viewBox: y axis flipped so font's negative-y ascender draws upward.
-  // Use transform on the inner <g> to translate baseline to (pad, pad+ascender)
-  // and flip y (scale(1,-1)).
-
   return (
     <div
       style={{
         position: "absolute",
-        top: "32%",
+        top: "30%",
         left: 70,
         right: 70,
         display: "flex",
         justifyContent: "center",
-        // scale entire SVG to fit width
       }}
     >
       <svg
         viewBox={`0 0 ${vbW} ${vbH}`}
-        style={{ width: "100%", height: "auto", overflow: "visible" }}
+        style={{ width: "100%", height: "auto", maxHeight: 720, overflow: "visible" }}
         xmlns="http://www.w3.org/2000/svg"
+        preserveAspectRatio="xMidYMid meet"
       >
-        {/* Drop shadow filter for ink */}
         <defs>
           <filter id="ink-shadow" x="-20%" y="-20%" width="140%" height="140%">
             <feGaussianBlur in="SourceAlpha" stdDeviation="3" />
@@ -381,8 +415,8 @@ function CalligraphySVG({
             <feComponentTransfer><feFuncA type="linear" slope="0.55" /></feComponentTransfer>
             <feMerge><feMergeNode /><feMergeNode in="SourceGraphic" /></feMerge>
           </filter>
-          <filter id="ink-glow" x="-30%" y="-30%" width="160%" height="160%">
-            <feGaussianBlur stdDeviation="4" result="b" />
+          <filter id="ink-glow" x="-40%" y="-40%" width="180%" height="180%">
+            <feGaussianBlur stdDeviation="6" result="b" />
             <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
           </filter>
         </defs>
@@ -390,33 +424,29 @@ function CalligraphySVG({
           {words.map((w, i) => {
             const wStart = offsets[i];
             const wDur = Math.max(8, wordDurations[i]);
-            // 0..1 progress over word window
             const p = Math.max(0, Math.min(1, (frame - wStart) / wDur));
-            // ease-out cubic for natural pen lift
             const ease = 1 - Math.pow(1 - p, 3);
             const dashOffset = (1 - ease) * w.approxLength;
-            // Fill fades in at 60% progress
-            const fillOp = Math.max(0, Math.min(1, (p - 0.6) / 0.35));
+            const fillOp = Math.max(0, Math.min(1, (p - 0.55) / 0.35));
             const isCurrent = frame >= wStart && frame < wStart + wDur;
-            const strokeColor = isCurrent ? palette.light : palette.light;
-            const fillColor = palette.light;
+            // Per-word amplitude reactivity: stroke pulses with the voice
+            const reactiveBoost = isCurrent ? amplitude * 1.6 : 0;
+            const strokeWidth = 3.5 + reactiveBoost;
             const glowFilter = isCurrent ? "url(#ink-glow)" : undefined;
 
             return (
               <g key={i} transform={`translate(${wordX[i]}, 0)`}>
-                {/* Filled glyph (fades in) */}
                 <path
                   d={w.pathD}
-                  fill={fillColor}
+                  fill={palette.light}
                   fillOpacity={fillOp * 0.95}
                   filter={glowFilter}
                 />
-                {/* Stroked outline reveal */}
                 <path
                   d={w.pathD}
                   fill="none"
-                  stroke={strokeColor}
-                  strokeWidth={3.5}
+                  stroke={palette.light}
+                  strokeWidth={strokeWidth}
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   strokeDasharray={w.approxLength}
@@ -428,6 +458,67 @@ function CalligraphySVG({
           })}
         </g>
       </svg>
+    </div>
+  );
+}
+
+/**
+ * HTML fallback: real Amiri Quran web font, words revealed by fade as their
+ * window opens. Not stroke-by-stroke, but always renders correct text.
+ */
+function CalligraphyHTMLFallback({
+  words,
+  offsets,
+  wordDurations,
+  frame,
+  palette,
+  amplitude,
+}: {
+  words: ShapedWord[];
+  offsets: number[];
+  wordDurations: number[];
+  frame: number;
+  palette: CreativeBrief["palette"];
+  amplitude: number;
+}) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: "28%",
+        left: 70,
+        right: 70,
+        textAlign: "center",
+        direction: "rtl",
+        fontFamily: "'Amiri Quran', 'Amiri', 'Scheherazade New', serif",
+        fontSize: 96,
+        lineHeight: 1.7,
+        color: palette.light,
+        textShadow: `0 0 18px ${hexAlpha(palette.accent, 0.5)}, 0 4px 14px ${hexAlpha(palette.shadow, 0.85)}`,
+        wordSpacing: 8,
+      }}
+    >
+      {words.map((w, i) => {
+        const wStart = offsets[i];
+        const wDur = Math.max(8, wordDurations[i]);
+        const p = Math.max(0, Math.min(1, (frame - wStart) / Math.max(8, wDur * 0.6)));
+        const isCurrent = frame >= wStart && frame < wStart + wDur;
+        const glow = isCurrent ? `0 0 ${24 + amplitude * 30}px ${hexAlpha(palette.accent, 0.7)}` : undefined;
+        return (
+          <span
+            key={i}
+            style={{
+              opacity: p,
+              transform: `translateY(${(1 - p) * 12}px)`,
+              display: "inline-block",
+              margin: "0 8px",
+              textShadow: glow,
+            }}
+          >
+            {w.text}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -517,8 +608,8 @@ function FilmGrain({ frame }: { frame: number }) {
 }
 
 function SurahChip({
-  brief, surahName, surahNameEnglish, ayahStart, ayahEnd,
-}: { brief: CreativeBrief; surahName: string; surahNameEnglish: string; ayahStart: number; ayahEnd: number }) {
+  brief, surahNameEnglish, ayahStart, ayahEnd,
+}: { brief: CreativeBrief; surahNameEnglish: string; ayahStart: number; ayahEnd: number }) {
   const frame = useCurrentFrame();
   const op = interpolate(frame, [0, 12, 56, 72], [0, 1, 1, 0], { extrapolateRight: "clamp" });
   const palette = brief.palette;
@@ -536,11 +627,11 @@ function SurahChip({
         border: `1px solid ${hexAlpha(palette.accent, 0.5)}`,
       }}
     >
-      <div style={{ fontFamily: "'Amiri Quran', serif", fontSize: 28, color: palette.light, direction: "rtl", lineHeight: 1.2 }}>
-        {surahName}
+      <div style={{ fontFamily: `'${brief.typography.display}', serif`, fontSize: 18, color: palette.light, letterSpacing: 4, lineHeight: 1.2 }}>
+        {surahNameEnglish.toUpperCase()}
       </div>
-      <div style={{ fontFamily: `'${brief.typography.display}', serif`, fontSize: 14, color: palette.accent, letterSpacing: 3, marginTop: 4 }}>
-        {surahNameEnglish.toUpperCase()} · {ayahStart}{ayahStart !== ayahEnd ? `–${ayahEnd}` : ""}
+      <div style={{ fontFamily: `'${brief.typography.display}', serif`, fontSize: 13, color: palette.accent, letterSpacing: 3, marginTop: 4 }}>
+        AYAH {ayahStart}{ayahStart !== ayahEnd ? `–${ayahEnd}` : ""}
       </div>
     </div>
   );

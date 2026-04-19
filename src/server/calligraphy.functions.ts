@@ -26,6 +26,10 @@ type ShapedWord = {
   text: string;
   /** Number of glyphs in this word */
   glyphCount: number;
+  /** Optional precomputed start frame (from Gemini alignment) */
+  startFrame?: number;
+  /** Optional precomputed end frame (from Gemini alignment) */
+  endFrame?: number;
 };
 
 export type ShapedAyah = {

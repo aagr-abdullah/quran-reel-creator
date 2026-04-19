@@ -4,6 +4,16 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Amiri Quran web font — used by HTML calligraphy fallback */
+@font-face {
+  font-family: 'Amiri Quran';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/AmiriQuran-Regular.ttf') format('truetype');
+  unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF;
+}
+
 /*
  * Quran Reel Studio — design system
  * Warm parchment + reed-ink red + illuminated gold
