@@ -353,7 +353,7 @@ function StudioPage() {
               </div>
               {phase === "fetching" && <Loading text={progress} />}
               {(phase === "detected" || phase === "ready") && (
-                <Button onClick={onConfirm} className="mt-5 illuminated h-11 rounded-full px-6" disabled={phase === "fetching"}>
+                <Button onClick={onConfirm} className="mt-5 illuminated h-11 rounded-full px-6">
                   <Check className="mr-1 h-4 w-4" /> Confirm verses
                 </Button>
               )}
