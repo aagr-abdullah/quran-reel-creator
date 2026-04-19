@@ -62,6 +62,11 @@ export type Database = {
           maqam: string | null
           maqam_mood: string | null
           meta: Json | null
+          render_bucket: string | null
+          render_error: string | null
+          render_id: string | null
+          render_progress: number | null
+          render_region: string | null
           status: string
           style: string | null
           substrate_url: string | null
@@ -78,6 +83,11 @@ export type Database = {
           maqam?: string | null
           maqam_mood?: string | null
           meta?: Json | null
+          render_bucket?: string | null
+          render_error?: string | null
+          render_id?: string | null
+          render_progress?: number | null
+          render_region?: string | null
           status?: string
           style?: string | null
           substrate_url?: string | null
@@ -94,6 +104,11 @@ export type Database = {
           maqam?: string | null
           maqam_mood?: string | null
           meta?: Json | null
+          render_bucket?: string | null
+          render_error?: string | null
+          render_id?: string | null
+          render_progress?: number | null
+          render_region?: string | null
           status?: string
           style?: string | null
           substrate_url?: string | null
