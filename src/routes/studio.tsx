@@ -379,8 +379,8 @@ function StudioPage() {
           )}
 
           {/* Step 3 — style */}
-          {(phase === "ready" || phase === "analyzing" || phase === "generating" || phase === "preview" || phase === "exporting") && (
-            <Card step={3} title="Choose your aesthetic" done={phase === "preview" || phase === "exporting" || phase === "generating" || phase === "analyzing"}>
+          {(phase === "ready" || phase === "analyzing" || phase === "generating" || phase === "preview" || phase === "rendering" || phase === "rendered") && (
+            <Card step={3} title="Choose your aesthetic" done={phase === "preview" || phase === "rendering" || phase === "rendered" || phase === "generating" || phase === "analyzing"}>
               <div className="grid grid-cols-2 gap-3">
                 {STYLES.map((s) => {
                   const sel = style === s.id;
@@ -404,26 +404,18 @@ function StudioPage() {
             </Card>
           )}
 
-          {/* Step 4 — generation progress / export */}
-          {(phase === "analyzing" || phase === "generating" || phase === "exporting") && (
+          {/* Step 4 — generation progress */}
+          {(phase === "analyzing" || phase === "generating") && (
             <Card step={4} title="Generating">
               <Loading text={progress || "Working…"} />
               {Object.keys(ayahAssets).length > 0 && (
                 <p className="mt-3 text-xs text-muted-foreground">{Object.keys(ayahAssets).length} of {verses.length} ayahs painted</p>
               )}
-              {phase === "exporting" && (
-                <div className="mt-4">
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-parchment-deep/60">
-                    <div className="h-full bg-gradient-to-r from-reed to-gold transition-[width]" style={{ width: `${exportProgress * 100}%` }} />
-                  </div>
-                  <p className="mt-2 text-center text-xs text-muted-foreground">{Math.round(exportProgress * 100)}% recorded</p>
-                </div>
-              )}
             </Card>
           )}
 
-          {phase === "preview" && (
-            <Card step={4} title="Save your reel">
+          {(phase === "preview" || phase === "rendering" || phase === "rendered") && (
+            <Card step={4} title="Render your MP4">
               {maqam && (
                 <div className="mb-4 rounded-lg border border-gold/30 bg-parchment-deep/30 p-4">
                   <div className="flex items-center justify-between">
@@ -440,12 +432,55 @@ function StudioPage() {
                   </div>
                 </div>
               )}
-              <Button onClick={onExport} className="illuminated h-12 w-full rounded-full px-7 text-base">
-                <Download className="mr-1 h-4 w-4" /> Save reel as video
-              </Button>
-              <p className="mt-3 text-center text-xs text-muted-foreground">
-                Recording captures the live preview. Keep this tab focused for best quality.
-              </p>
+
+              {phase === "preview" && (
+                <>
+                  <Button onClick={onRender} className="illuminated h-12 w-full rounded-full px-7 text-base">
+                    <Film className="mr-1 h-4 w-4" /> Render MP4 (1080×1920)
+                  </Button>
+                  <p className="mt-3 text-center text-xs text-muted-foreground">
+                    Renders frame-perfect on Remotion Lambda. Usually 30–90s.
+                  </p>
+                </>
+              )}
+
+              {phase === "rendering" && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3 rounded-lg border border-border/40 bg-parchment-deep/30 px-4 py-3 text-sm text-ink-soft">
+                    <Loader2 className="h-4 w-4 animate-spin text-reed" />
+                    <span>Rendering on Lambda… {Math.round(renderProgress * 100)}%</span>
+                  </div>
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-parchment-deep/60">
+                    <div className="h-full bg-gradient-to-r from-reed to-gold transition-[width]" style={{ width: `${renderProgress * 100}%` }} />
+                  </div>
+                </div>
+              )}
+
+              {phase === "rendered" && videoUrl && (
+                <div className="space-y-4">
+                  <video src={videoUrl} controls className="w-full rounded-lg border border-gold/30" />
+                  <a
+                    href={videoUrl}
+                    download={`quran-reel-${reelId}.mp4`}
+                    className="illuminated flex h-12 w-full items-center justify-center gap-2 rounded-full px-7 text-base font-medium"
+                  >
+                    <Download className="h-4 w-4" /> Download MP4
+                  </a>
+                  <Button
+                    variant="ghost"
+                    onClick={() => { setPhase("preview"); setVideoUrl(null); setRenderProgress(0); }}
+                    className="w-full"
+                  >
+                    Render again
+                  </Button>
+                </div>
+              )}
+
+              {renderError && phase !== "rendering" && (
+                <p className="mt-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+                  {renderError}
+                </p>
+              )}
             </Card>
           )}
         </div>
