@@ -134,6 +134,68 @@ function approxPathLength(commands: opentype.PathCommand[]): number {
   return length;
 }
 
+/**
+ * Try shaping a word with full Arabic features. opentype.js doesn't support
+ * every GSUB lookup type (notably lookupType 5 substFormat 3 — chained
+ * context substitution used heavily in Amiri Quran), so on failure we retry
+ * with features disabled, then with no options at all. Whatever produces a
+ * path wins. If everything throws, return a zero-width word so the renderer's
+ * SVG-invalid guard kicks in and the HTML+webfont fallback takes over.
+ */
+function safeShapeWord(font: opentype.Font, wordText: string, fontSize: number): ShapedWord {
+  const attempts: Array<() => { pathD: string; commands: opentype.PathCommand[]; width: number }> = [
+    () => {
+      const p = font.getPath(wordText, 0, 0, fontSize, {
+        features: { liga: true, rlig: true, calt: true } as never,
+      });
+      const w = font.getAdvanceWidth(wordText, fontSize, {
+        features: { liga: true, rlig: true, calt: true } as never,
+      });
+      return { pathD: p.toPathData(2), commands: p.commands, width: w };
+    },
+    () => {
+      // Disable optional features — keeps required Arabic joining (init/medi/fina/isol)
+      const p = font.getPath(wordText, 0, 0, fontSize, {
+        features: { liga: false, rlig: false, calt: false } as never,
+      });
+      const w = font.getAdvanceWidth(wordText, fontSize);
+      return { pathD: p.toPathData(2), commands: p.commands, width: w };
+    },
+    () => {
+      // Bare call — no options
+      const p = font.getPath(wordText, 0, 0, fontSize);
+      const w = font.getAdvanceWidth(wordText, fontSize);
+      return { pathD: p.toPathData(2), commands: p.commands, width: w };
+    },
+  ];
+
+  for (const attempt of attempts) {
+    try {
+      const { pathD, commands, width } = attempt();
+      if (pathD && pathD.length > 4 && width > 0) {
+        return {
+          pathD,
+          approxLength: Math.round(approxPathLength(commands)),
+          width: Math.round(width),
+          text: wordText,
+          glyphCount: commands.filter((c) => c.type === "M").length,
+        };
+      }
+    } catch (e) {
+      // opentype.js throws e.g. "lookupType: 5 - substFormat: 3 is not yet supported"
+      // for chained context substitutions. Try the next, less-featured attempt.
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!msg.includes("lookupType") && !msg.includes("substFormat")) {
+        console.warn(`[calligraphy] shape attempt failed for "${wordText}":`, msg);
+      }
+    }
+  }
+
+  // All attempts failed — zero-width sentinel triggers HTML+webfont fallback in renderer.
+  console.warn(`[calligraphy] could not shape word "${wordText}" — HTML fallback will render it`);
+  return { pathD: "", approxLength: 0, width: 0, text: wordText, glyphCount: 0 };
+}
+
 export const shapeAyahs = createServerFn({ method: "POST" })
   .inputValidator((input: { ayahs: Array<{ number: number; arabic: string }> }) => input)
   .handler(async ({ data }): Promise<{ shaped: ShapedAyah[] }> => {
@@ -141,35 +203,9 @@ export const shapeAyahs = createServerFn({ method: "POST" })
     const fontSize = 100; // arbitrary; renderer scales via viewBox
 
     const shaped: ShapedAyah[] = data.ayahs.map((a) => {
-      // Split into words. Arabic logical order (RTL handled by browser/SVG).
       const words = a.arabic.trim().split(/\s+/).filter(Boolean);
-
-      const shapedWords: ShapedWord[] = words.map((wordText) => {
-        // opentype.getPath shapes the text using GSUB tables (Arabic forms).
-        const wordPath = font.getPath(wordText, 0, 0, fontSize, {
-          features: { liga: true, rlig: true, calt: true } as never,
-        });
-        const commands = wordPath.commands;
-        const pathD = wordPath.toPathData(2);
-        const approxLength = approxPathLength(commands);
-
-        // Width via advanceWidth sum (post-shaping)
-        // opentype.Font.getAdvanceWidth shapes too.
-        const width = font.getAdvanceWidth(wordText, fontSize, {
-          features: { liga: true, rlig: true, calt: true } as never,
-        });
-
-        return {
-          pathD,
-          approxLength: Math.round(approxLength),
-          width: Math.round(width),
-          text: wordText,
-          glyphCount: wordPath.commands.filter((c) => c.type === "M").length,
-        };
-      });
-
+      const shapedWords: ShapedWord[] = words.map((w) => safeShapeWord(font, w, fontSize));
       const totalWidth = shapedWords.reduce((s, w) => s + w.width, 0);
-
       return {
         ayahNumber: a.number,
         words: shapedWords,
