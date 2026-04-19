@@ -177,9 +177,9 @@ export function QuranReel({ data }: { data: ReelData }) {
       {/* Subtle film grain (SVG noise) */}
       <FilmGrain frame={frame} />
 
-      {/* Surah chip — small corner overlay during first 60 frames only */}
+      {/* Surah chip — small Latin-only corner overlay during first 72 frames */}
       <Sequence from={0} durationInFrames={72}>
-        <SurahChip brief={brief} surahName={data.surahName} surahNameEnglish={data.surahNameEnglish} ayahStart={data.ayahStart} ayahEnd={data.ayahEnd} />
+        <SurahChip brief={brief} surahNameEnglish={data.surahNameEnglish} ayahStart={data.ayahStart} ayahEnd={data.ayahEnd} />
       </Sequence>
 
       {/* Endcard — final 36 frames */}
@@ -608,8 +608,8 @@ function FilmGrain({ frame }: { frame: number }) {
 }
 
 function SurahChip({
-  brief, surahName, surahNameEnglish, ayahStart, ayahEnd,
-}: { brief: CreativeBrief; surahName: string; surahNameEnglish: string; ayahStart: number; ayahEnd: number }) {
+  brief, surahNameEnglish, ayahStart, ayahEnd,
+}: { brief: CreativeBrief; surahNameEnglish: string; ayahStart: number; ayahEnd: number }) {
   const frame = useCurrentFrame();
   const op = interpolate(frame, [0, 12, 56, 72], [0, 1, 1, 0], { extrapolateRight: "clamp" });
   const palette = brief.palette;
@@ -627,11 +627,11 @@ function SurahChip({
         border: `1px solid ${hexAlpha(palette.accent, 0.5)}`,
       }}
     >
-      <div style={{ fontFamily: "'Amiri Quran', serif", fontSize: 28, color: palette.light, direction: "rtl", lineHeight: 1.2 }}>
-        {surahName}
+      <div style={{ fontFamily: `'${brief.typography.display}', serif`, fontSize: 18, color: palette.light, letterSpacing: 4, lineHeight: 1.2 }}>
+        {surahNameEnglish.toUpperCase()}
       </div>
-      <div style={{ fontFamily: `'${brief.typography.display}', serif`, fontSize: 14, color: palette.accent, letterSpacing: 3, marginTop: 4 }}>
-        {surahNameEnglish.toUpperCase()} · {ayahStart}{ayahStart !== ayahEnd ? `–${ayahEnd}` : ""}
+      <div style={{ fontFamily: `'${brief.typography.display}', serif`, fontSize: 13, color: palette.accent, letterSpacing: 3, marginTop: 4 }}>
+        AYAH {ayahStart}{ayahStart !== ayahEnd ? `–${ayahEnd}` : ""}
       </div>
     </div>
   );
