@@ -7,12 +7,12 @@ import { uploadAudio } from "@/server/upload.functions";
 import { detectVerses, fetchVerses, type AyahPayload } from "@/server/detect.functions";
 import { detectMaqam, analyzeVerseMeaning } from "@/server/maqam.functions";
 import { generateSubstrate, generateAyahBackground } from "@/server/assets.functions";
+import { renderReel as renderReelFn, getRenderProgress } from "@/server/render.functions";
 import { SURAHS, STYLES, suggestStyle, type ReelStyle, getSurah } from "@/lib/surahs";
 import { Player, type PlayerRef } from "@remotion/player";
 import { QuranReel, REEL_FPS, REEL_W, REEL_H, totalDurationFrames, type AyahData, type ReelData } from "@/remotion/QuranReel";
-import { captureReel } from "@/lib/capture-reel";
 import { toast } from "sonner";
-import { Upload, Loader2, Wand2, Mic2, Sparkles, Check, Play, Download } from "lucide-react";
+import { Upload, Loader2, Wand2, Mic2, Sparkles, Check, Play, Download, Film } from "lucide-react";
 import { Toaster } from "sonner";
 
 export const Route = createFileRoute("/studio")({
@@ -25,7 +25,7 @@ export const Route = createFileRoute("/studio")({
   component: StudioPage,
 });
 
-type Phase = "idle" | "uploaded" | "detecting" | "detected" | "fetching" | "ready" | "analyzing" | "generating" | "preview" | "exporting";
+type Phase = "idle" | "uploaded" | "detecting" | "detected" | "fetching" | "ready" | "analyzing" | "generating" | "preview" | "rendering" | "rendered";
 
 interface DetectCandidate {
   surah: number;
@@ -42,6 +42,8 @@ function StudioPage() {
   const analyzeFn = useServerFn(analyzeVerseMeaning);
   const substrateFn = useServerFn(generateSubstrate);
   const bgFn = useServerFn(generateAyahBackground);
+  const renderFn = useServerFn(renderReelFn);
+  const progressFn = useServerFn(getRenderProgress);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -58,7 +60,9 @@ function StudioPage() {
   const [substrateUrl, setSubstrateUrl] = useState<string | null>(null);
   const [ayahAssets, setAyahAssets] = useState<Record<number, { backgroundUrl?: string; meaning?: { mood: string; imagery: string; concept: string; colorHint: string } }>>({});
   const [progress, setProgress] = useState<string>("");
-  const [exportProgress, setExportProgress] = useState<number>(0);
+  const [renderProgress, setRenderProgress] = useState<number>(0);
+  const [renderError, setRenderError] = useState<string | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
 
   const playerRef = useRef<PlayerRef>(null);
   const playerWrapRef = useRef<HTMLDivElement>(null);
