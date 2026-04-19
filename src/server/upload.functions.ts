@@ -1,10 +1,25 @@
 import { createServerFn } from "@tanstack/react-start";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { createClient } from "@supabase/supabase-js";
+import type { Database } from "@/integrations/supabase/types";
+
+function getAdmin() {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) {
+    throw new Error(
+      `Missing Supabase server env. url=${!!url} serviceKey=${!!key}. Restart the dev server after adding secrets.`
+    );
+  }
+  return createClient<Database>(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
 
 /** Upload audio (base64) to the recitations bucket. */
 export const uploadAudio = createServerFn({ method: "POST" })
   .inputValidator((input: { base64: string; filename: string; contentType: string }) => input)
   .handler(async ({ data }) => {
+    const supabaseAdmin = getAdmin();
     const { base64, filename, contentType } = data;
     const cleaned = base64.includes(",") ? base64.split(",")[1] : base64;
     const bytes = Uint8Array.from(atob(cleaned), (c) => c.charCodeAt(0));
