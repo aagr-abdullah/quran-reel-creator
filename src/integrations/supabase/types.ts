@@ -14,7 +14,95 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      ayah_assets: {
+        Row: {
+          ayah_number: number
+          background_url: string | null
+          created_at: string
+          id: string
+          meaning: Json | null
+          ornament_url: string | null
+          reel_id: string
+        }
+        Insert: {
+          ayah_number: number
+          background_url?: string | null
+          created_at?: string
+          id?: string
+          meaning?: Json | null
+          ornament_url?: string | null
+          reel_id: string
+        }
+        Update: {
+          ayah_number?: number
+          background_url?: string | null
+          created_at?: string
+          id?: string
+          meaning?: Json | null
+          ornament_url?: string | null
+          reel_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ayah_assets_reel_id_fkey"
+            columns: ["reel_id"]
+            isOneToOne: false
+            referencedRelation: "reels"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      reels: {
+        Row: {
+          audio_url: string
+          ayah_end: number | null
+          ayah_start: number | null
+          created_at: string
+          id: string
+          maqam: string | null
+          maqam_mood: string | null
+          meta: Json | null
+          status: string
+          style: string | null
+          substrate_url: string | null
+          surah: number | null
+          updated_at: string
+          video_url: string | null
+        }
+        Insert: {
+          audio_url: string
+          ayah_end?: number | null
+          ayah_start?: number | null
+          created_at?: string
+          id?: string
+          maqam?: string | null
+          maqam_mood?: string | null
+          meta?: Json | null
+          status?: string
+          style?: string | null
+          substrate_url?: string | null
+          surah?: number | null
+          updated_at?: string
+          video_url?: string | null
+        }
+        Update: {
+          audio_url?: string
+          ayah_end?: number | null
+          ayah_start?: number | null
+          created_at?: string
+          id?: string
+          maqam?: string | null
+          maqam_mood?: string | null
+          meta?: Json | null
+          status?: string
+          style?: string | null
+          substrate_url?: string | null
+          surah?: number | null
+          updated_at?: string
+          video_url?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
