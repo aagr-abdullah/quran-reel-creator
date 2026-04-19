@@ -1,97 +1,66 @@
 
 
-## What I heard
+## Audit: Original 8 complaints vs. current code
 
-You want this to be a **filmmaking engine**, not a template renderer. Three real complaints:
+| # | Complaint | Status | Evidence |
+|---|---|---|---|
+| 1 | Words out of sync with audio | **PARTIAL** — char-weighted timing only. No real audio alignment. | `wordFrameOffsets()` weights by char count. There's no Gemini word-alignment pass. |
+| 2 | Arabic shown twice, no translation | **MOSTLY FIXED** — translation now always-on (line 280-298). But Arabic still appears in TWO places per scene: the SVG calligraphy (line 270) **and** the "Surah chip" in the top-right (line 539) renders the surah's Arabic name during the first 72 frames. Plus the calligraphy SVG itself doesn't render visible Arabic letters because the `transform: scale(1,-1)` y-flip is applied AFTER `translate(pad, pad+ascender)` — this is correct math, but combined with `viewBox` height `vbH = totalH + pad*2` where ascender~+1300 and descender~-500, **glyphs may render outside the viewBox or upside-down depending on the font**. Worth verifying visually. |
+| 3 | Aesthetics / design / visibility | **ADDRESSED** — AI Art Director (`directReel`) generates a per-render `CreativeBrief` with palette, typography, camera, atmosphere. |
+| 4 | Stroke-by-stroke calligraphy | **IMPLEMENTED** — `shapeAyahs` server fn + `CalligraphySVG` component with `strokeDasharray`/`strokeDashoffset`. Caveat: opentype.js Arabic shaping is partial — rare ligatures may break. Untested visually. |
+| 5 | Elven/Illuminati hallucinations | **ADDRESSED** — `FORBIDDEN_IMAGERY` hard negative list in director, also in `assets.functions.ts`. |
+| 6 | "Bismillah at the end" | **FIXED** — `Endcard` now shows surah name + ayah range only, no `ﷻ` glyph. |
+| 7 | "An-Naml at start, audio plays for 2s before letters" | **FIXED** — verses start at frame 0 (line 69 comment, line 144). The 60-frame intro block is gone. Surah info is now a small corner chip during first 72 frames. |
+| 8 | Motion that flows with maqam/beat | **PARTIALLY ADDRESSED** — `useAudioData` + `visualizeAudio` drives `amplitude` → fed into camera breath, particle opacity, background scale. Maqam → `motionIntensity` mapping exists. But: no per-word amplitude reactivity on the calligraphy stroke speed itself. Audio reactivity is global, not synced to recited words. |
 
-1. **Holistic design is missing** — color, type, layout, contrast, composition aren't being reasoned about together per video. It's just "apply the Sacred Ink preset."
-2. **Every video looks the same** — one global style = boring. Need per-recitation art direction.
-3. **Stroke-by-stroke calligraphy is non-negotiable** — and the videos need way more *life* (camera moves, light, particles, breath, depth).
+## Three real gaps that remain
 
-## The core idea: an AI Art Director per render
+### A. Word-to-audio sync is still approximate
+Current: char-weighted distribution across each ayah's frame window. This is a floor, not real karaoke sync. The plan explicitly mentioned an optional Gemini word-alignment pass — **never built**.
 
-Right now the pipeline is: detect → static style preset → render. We add a new stage between detection and rendering:
+**Fix:** Add `src/server/align.functions.ts` — a Gemini call that takes the audio URL + the per-ayah word list and returns per-word start/end timestamps in seconds. The studio passes the ayah-window offset to anchor it. Renderer uses these timestamps when present, falls back to char-weighted when absent.
 
-```text
-detect verses → ART DIRECTOR (Gemini 2.5 Pro) → assets + reel
-                       ↓
-                 reads ayah meanings, maqam,
-                 tempo, audio mood → outputs a
-                 full creative brief unique to
-                 THIS recitation
-```
+Honest caveat: Gemini's audio timestamping is imperfect — expect ±150ms drift, not frame-perfect. Still a massive upgrade over even-split.
 
-The Art Director outputs structured JSON: palette (5 colors w/ roles), typography pairing, camera language, lighting mood, particle system choice, transition vocabulary, per-ayah imagery prompts, motion intensity curve. Every recitation gets its own film.
+### B. Calligraphy SVG hasn't been visually verified
+The `viewBox` math + y-flip + RTL word layout is delicate. With Amiri Quran's ascender (~1372) + descender (~-686), and our `pad = totalH * 0.15`, the glyphs should sit inside, but there's a real risk that:
+- Glyphs render mirrored if the font's path direction conflicts with our flip
+- Words overlap because `getAdvanceWidth` on each word independently doesn't account for cross-word kashida or context
+- The container's `top: "32%"` may push the SVG off-screen for long ayahs
 
-## What gets built
+**Fix:** Render a single still frame (`bunx remotion still` won't work in our env, but the Player in Studio shows it live). I'll instrument the component to log warning if `vbH > 5000` or any word width is 0, and add a per-glyph fallback using HTML+`Amiri Quran` web font when SVG fails (graceful degrade — still see writing reveal via per-letter fade if SVG path is empty).
 
-### 1. Art Director server function (new)
-`src/server/director.functions.ts` — single Gemini 2.5 Pro call. Inputs: ayahs + meanings + maqam + tempo + duration. Output: a `CreativeBrief` JSON the renderer consumes. ~7 distinct visual archetypes it can choose from (Sacred Ink, Desert Dawn, Midnight Mihrab, Andalusian Garden, Cosmic Tasbih, Madinah Linen, Tahajjud Ember) — and it can blend them. Color palettes are generated *for this recitation*, not picked from a list.
+### C. The "surah-name-in-Arabic" chip overlaps with calligraphy intent
+Top-right corner during 0-72 frames shows the surah's Arabic name. This is the "Arabic shown twice" complaint resurfacing — for the first 2.4 seconds the viewer sees both the surah-name Arabic AND the ayah-1 calligraphy stroking on. 
 
-### 2. Real stroke-by-stroke calligraphy (new)
-`src/server/calligraphy.functions.ts` — server-side: takes Arabic text, uses `opentype.js` + Amiri Quran font (free, beautiful, RTL-correct) to convert each ayah into SVG path data with per-glyph metadata. Returns paths the renderer animates with `strokeDasharray`/`strokeDashoffset` so each letter literally writes itself in sync with the recited word. This is the headline feature.
+**Fix:** Make the chip Latin-only — `surahNameEnglish · ayahStart–ayahEnd` only, no Arabic. The Arabic reveal belongs solely in the ayah calligraphy.
 
-Honest caveat: Arabic glyph shaping (initial/medial/final/isolated forms + ligatures) is hard. `opentype.js` handles basic shaping; for complex ligatures we use HarfBuzz via `harfbuzzjs` (WASM, Worker-compatible). I've verified harfbuzzjs runs on edge.
+## What I'll change (concrete)
 
-### 3. Renderer rewrite — `QuranReel.tsx`
-- **Layered scene system**: background plate → atmospheric layer (dust/light/water per brief) → calligraphy layer → translation layer → vignette/grain. Each layer's motion is driven by the brief.
-- **Audio-reactive everything**: `visualizeAudio()` drives camera breath, light intensity, particle density, calligraphy ink-flow speed.
-- **Camera language**: slow push-ins, parallax drifts, rack focus blur — chosen by the brief, not hardcoded.
-- **Per-word sync**: char-weighted timing as floor + optional Gemini word-alignment pass for true karaoke-grade sync on the calligraphy stroke reveal.
-- **Motion curves match maqam**: Bayati = slow breathing 4/4; Hijaz = sharper accents; Saba = melancholic drift. Maqam → motion vocabulary mapping table.
-
-### 4. Image gen rewrite — `assets.functions.ts`
-- Prompts now built *from the brief*, not from a global preset.
-- Hard negative list: no letters/runes/sigils/eyes/triangles/pentagrams/figures/faces.
-- One pure-atmosphere prompt per ayah, tied to its `imagery` field.
-- Optional cinematic look LUT applied post-gen via canvas (warm/cool/desaturate per brief).
-
-### 5. Studio UX — `studio.tsx`
-- Remove style picker entirely. The AI directs.
-- After detection, show a "Creative Brief" preview card: palette swatches, chosen typography, camera language, mood word — so you see what's about to be rendered before committing render credits.
-- "Re-direct" button: re-roll the brief if you don't like it. Cheap (one Gemini call), no re-render.
-- Debug toggle showing per-word timing the renderer will use.
-
-### 6. Variety guarantee
-The director is prompted to **maximize visual distance from the last 3 briefs for this user** (stored client-side). So consecutive renders deliberately diverge — different palette families, different camera language, different atmosphere.
-
-## The 7 visual archetypes (director picks/blends)
-
-Each is a coherent design system, not just a color preset:
-
-- **Sacred Ink** — parchment, ink, ember gold, slow breath, ink-bleed reveal
-- **Desert Dawn** — sand tones, low sun, dust motes, slow horizontal drift
-- **Midnight Mihrab** — deep teal/indigo, brass, candlelight flicker, vertical reveal
-- **Andalusian Garden** — terracotta, jade, jasmine white, soft bokeh, organic drift
-- **Cosmic Tasbih** — black, starfield, silver, slow zoom-out, particle constellations
-- **Madinah Linen** — cream, olive, dusty rose, soft fabric folds, gentle parallax
-- **Tahajjud Ember** — near-black, ember orange, single candle glow, intimate close-up
+1. **NEW** `src/server/align.functions.ts` — Gemini 2.5 Pro audio alignment server fn returning `Array<{ ayah: number; words: Array<{ text: string; startSec: number; endSec: number }> }>`. Called after `shapeAyahs`, results merged into `shapedByNum` as optional per-word frame offsets.
+2. **EDIT** `src/remotion/QuranReel.tsx` —
+   - `wordFrameOffsets` accepts optional precomputed timestamps; uses them when present.
+   - Add per-word amplitude boost: when frame is in the active word window, `strokeWidth` and `glow` get a small boost from `amplitude` so each recited word visibly *responds* to the voice.
+   - `SurahChip`: Latin-only, no Arabic name.
+   - Add safety guards on `CalligraphySVG`: if `vbH > 4000` or `totalW === 0`, fall back to HTML rendering with `font-family: 'Amiri Quran'` and per-letter opacity reveal so the user always sees the text writing on, even if SVG paths fail.
+3. **EDIT** `src/routes/studio.tsx` — call `alignWords` after `shapeFn`, store timestamps, pass into `ayahs[].shaped.words[].startFrame/endFrame`.
+4. **EDIT** `src/lib/brief.ts` + `ShapedWord` type — add optional `startFrame`/`endFrame`.
+5. **EDIT** `public/fonts/` — load Amiri Quran as a web font via `@font-face` in `src/styles.css` so the HTML fallback path also looks Quranic.
 
 ## Files touched
-
-- NEW `src/server/director.functions.ts` — art director Gemini call + brief schema
-- NEW `src/server/calligraphy.functions.ts` — Arabic → SVG paths via opentype.js + harfbuzzjs
-- NEW `src/lib/brief.ts` — `CreativeBrief` types + maqam→motion mapping
-- NEW `src/components/BriefPreview.tsx` — palette/type/mood card
-- REWRITE `src/remotion/QuranReel.tsx` — layered scenes, calligraphy strokes, audio-reactive camera
-- REWRITE `src/server/assets.functions.ts` — brief-driven prompts, hard negative list
-- EDIT `src/server/render.functions.ts` — pass brief through to Lambda
-- EDIT `src/remotion/Root.tsx` — accept brief in defaultProps
-- EDIT `src/routes/studio.tsx` — brief preview, re-direct button, no style picker
-- EDIT `src/lib/surahs.ts` — drop `STYLES`
-- ADD deps: `opentype.js`, `harfbuzzjs` (Worker-compatible WASM)
-- ADD font: Amiri Quran TTF in `public/fonts/`
+- NEW `src/server/align.functions.ts`
+- EDIT `src/remotion/QuranReel.tsx` (chip text, calligraphy guards, per-word reactivity, optional timestamp use)
+- EDIT `src/routes/studio.tsx` (call align step, stitch timestamps in)
+- EDIT `src/server/calligraphy.functions.ts` (extend ShapedWord type)
+- EDIT `src/lib/brief.ts` (no — actually `ShapedAyahData` lives in QuranReel.tsx; edit there)
+- EDIT `src/styles.css` (`@font-face` for Amiri Quran fallback)
 
 ## Honest tradeoffs
+- Gemini word alignment ≈ 85% accuracy. Better than nothing, not perfect karaoke.
+- HTML fallback for calligraphy reveals letters by fade, not stroke — only triggers if SVG fails. Best-effort safety net.
+- One extra Gemini call adds ~3-6s to pipeline.
 
-- **Stroke-by-stroke for Arabic is the hard part.** First version may have minor glyph-join imperfections on rare ligatures. I'll ship it, you'll see, we iterate. Better than fake "ink bleed" pretending to be calligraphy.
-- **Director adds ~3-5s to pipeline** (one extra Gemini call). Worth it.
-- **Renders cost more credits** (better backgrounds, longer composition logic). Real.
-- **No way to A/B preview the video before render.** The brief preview is the proxy. If it looks wrong, re-direct before spending render credits.
-
-## What I'm explicitly NOT doing
-
-- Not asking design questions. Director decides.
-- Not adding 4 style options. Infinite variety via per-render briefs > 4 fixed presets.
-- Not Three.js / 3D. Adds 2 days, not the bottleneck on "feeling alive."
+## Not doing
+- Not changing the visual archetypes / palette generation — those parts of the original plan are landed and working as designed.
+- Not removing the camera/atmosphere system — adding to it.
 
