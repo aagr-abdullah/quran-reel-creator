@@ -203,35 +203,9 @@ export const shapeAyahs = createServerFn({ method: "POST" })
     const fontSize = 100; // arbitrary; renderer scales via viewBox
 
     const shaped: ShapedAyah[] = data.ayahs.map((a) => {
-      // Split into words. Arabic logical order (RTL handled by browser/SVG).
       const words = a.arabic.trim().split(/\s+/).filter(Boolean);
-
-      const shapedWords: ShapedWord[] = words.map((wordText) => {
-        // opentype.getPath shapes the text using GSUB tables (Arabic forms).
-        const wordPath = font.getPath(wordText, 0, 0, fontSize, {
-          features: { liga: true, rlig: true, calt: true } as never,
-        });
-        const commands = wordPath.commands;
-        const pathD = wordPath.toPathData(2);
-        const approxLength = approxPathLength(commands);
-
-        // Width via advanceWidth sum (post-shaping)
-        // opentype.Font.getAdvanceWidth shapes too.
-        const width = font.getAdvanceWidth(wordText, fontSize, {
-          features: { liga: true, rlig: true, calt: true } as never,
-        });
-
-        return {
-          pathD,
-          approxLength: Math.round(approxLength),
-          width: Math.round(width),
-          text: wordText,
-          glyphCount: wordPath.commands.filter((c) => c.type === "M").length,
-        };
-      });
-
+      const shapedWords: ShapedWord[] = words.map((w) => safeShapeWord(font, w, fontSize));
       const totalWidth = shapedWords.reduce((s, w) => s + w.width, 0);
-
       return {
         ayahNumber: a.number,
         words: shapedWords,
