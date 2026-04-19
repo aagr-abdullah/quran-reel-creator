@@ -1,19 +1,17 @@
+/**
+ * Image generation — driven by the AI Art Director's CreativeBrief.
+ *
+ * - Substrate uses brief.substratePrompt
+ * - Per-ayah backgrounds use brief.ayahDirections[i].imagePrompt
+ * - All prompts include a hard negative list (no letters/runes/sigils/figures)
+ */
 import { createServerFn } from "@tanstack/react-start";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import type { ReelStyle } from "@/lib/surahs";
 
 const LOVABLE_AI_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
 
-const STYLE_PROMPTS: Record<ReelStyle, string> = {
-  "calligraphic-bloom":
-    "warm sepia parchment, ink-wash bloom, abstract Arabic calligraphic strokes (NOT readable text), reed pen aesthetic, hand-painted, deep rust and ochre, sumi-e influence, no figurative imagery, no human or animal forms, no faces",
-  "liquid-light":
-    "drifting volumetric light, soft caustics, indigo and amber gradients, dreamlike haze, A24 cinematic atmosphere, ethereal smoke, no figurative imagery, no human or animal forms, no faces, no text, no letters",
-  "sacred-geometry":
-    "intricate Islamic geometric patterns, girih tilings, 8-point and 12-point stars, vegetal arabesques, teal and gold and ivory, ordered and contemplative, no figurative imagery, no human or animal forms, no faces, no text, no letters",
-  "celestial":
-    "deep midnight cosmos, drifting stars, soft nebulae, dawn glow at edges, purple and gold and blue, vast and luminous, no figurative imagery, no human or animal forms, no faces, no text, no letters",
-};
+const HARD_NEGATIVES =
+  "STRICTLY FORBIDDEN: no letters, no words, no Arabic text, no calligraphy, no script, no runes, no glyphs, no sigils, no symbols, no eyes, no triangles, no pyramids, no all-seeing-eye, no pentagrams, no hexagrams, no stars-of-david, no Tolkien runes, no occult imagery, no faces, no people, no human figures, no animals, no religious figures, no hands. Pure atmospheric/landscape/texture imagery only.";
 
 async function generateImage(prompt: string): Promise<string> {
   const apiKey = process.env.LOVABLE_API_KEY;
@@ -50,52 +48,36 @@ async function uploadDataUrl(dataUrl: string, path: string): Promise<string> {
   return data.publicUrl;
 }
 
-/** Generate a parchment substrate for the reel. */
 export const generateSubstrate = createServerFn({ method: "POST" })
-  .inputValidator((input: { reelId: string; style: ReelStyle }) => input)
+  .inputValidator((input: { reelId: string; substratePrompt: string; paletteHints: string }) => input)
   .handler(async ({ data }) => {
-    const stylePrompt = STYLE_PROMPTS[data.style];
-    const prompt = `A vertical 9:16 portrait artistic background. Aged warm parchment paper texture with subtle ink stains, worn edges, soft vignette. Style influence: ${stylePrompt}. Empty center area for text overlay. Painterly, museum-quality, no people, no text, no calligraphy. Sacred and reverent mood.`;
+    const prompt = `Vertical 9:16 portrait artistic background plate for a sacred Quranic recitation reel. ${data.substratePrompt}. Color palette: ${data.paletteHints}. Soft empty center area for verse text overlay. Painterly, museum-quality, sacred and reverent mood. ${HARD_NEGATIVES}`;
     const dataUrl = await generateImage(prompt);
     const url = await uploadDataUrl(dataUrl, `${data.reelId}/substrate.png`);
-    await supabaseAdmin.from("reels").update({ substrate_url: url, style: data.style }).eq("id", data.reelId);
+    await supabaseAdmin.from("reels").update({ substrate_url: url }).eq("id", data.reelId);
     return { url };
   });
 
-/** Generate a per-ayah background informed by style + meaning + maqam mood. */
 export const generateAyahBackground = createServerFn({ method: "POST" })
   .inputValidator((input: {
     reelId: string;
     ayahNumber: number;
-    style: ReelStyle;
-    maqamMood: string;
-    palette: string[];
-    meaning: { mood: string; imagery: string; concept: string; colorHint: string };
+    imagePrompt: string;
+    paletteHints: string;
+    colorGrade: "warm" | "cool" | "neutral" | "desaturated";
   }) => input)
   .handler(async ({ data }) => {
-    const stylePrompt = STYLE_PROMPTS[data.style];
-    const prompt = `Vertical 9:16 atmospheric background art. ${stylePrompt}. Mood: ${data.maqamMood}, ${data.meaning.mood}. Imagery: ${data.meaning.imagery}. Theme: ${data.meaning.concept}. Color: ${data.meaning.colorHint}, accent palette ${data.palette.join(", ")}. Soft empty area in the middle and lower third for verse text overlay. No people, no animals, no text, no letters, no calligraphy. Painterly, sacred, museum-quality.`;
+    const gradeWord =
+      data.colorGrade === "cool" ? "cool blue cinematic grade"
+      : data.colorGrade === "desaturated" ? "desaturated muted earthen tones"
+      : data.colorGrade === "neutral" ? "neutral natural color"
+      : "warm golden cinematic grade";
+    const prompt = `Vertical 9:16 atmospheric background art for a sacred Quranic recitation. ${data.imagePrompt}. ${gradeWord}. Accent palette: ${data.paletteHints}. Soft empty area in the middle and lower third for verse text overlay. Painterly, museum-quality, sacred and reverent. ${HARD_NEGATIVES}`;
     const dataUrl = await generateImage(prompt);
     const url = await uploadDataUrl(dataUrl, `${data.reelId}/ayah-${data.ayahNumber}-bg.png`);
     await supabaseAdmin.from("ayah_assets").upsert(
-      { reel_id: data.reelId, ayah_number: data.ayahNumber, background_url: url, meaning: data.meaning as never },
+      { reel_id: data.reelId, ayah_number: data.ayahNumber, background_url: url },
       { onConflict: "reel_id,ayah_number" },
     );
     return { url };
   });
-
-/** Generate a gold-leaf ornamental flourish. */
-export const generateOrnament = createServerFn({ method: "POST" })
-  .inputValidator((input: { reelId: string; ayahNumber: number; style: ReelStyle }) => input)
-  .handler(async ({ data }) => {
-    const prompt = `A small ornamental gold-leaf flourish for an illuminated Quranic manuscript. Centered, transparent-friendly background, intricate Islamic geometric and vegetal patterns, real gold leaf texture, no text, no calligraphy, no human or animal forms. Style: ${data.style}. 1:1 square composition.`;
-    const dataUrl = await generateImage(prompt);
-    const url = await uploadDataUrl(dataUrl, `${data.reelId}/ayah-${data.ayahNumber}-ornament.png`);
-    await supabaseAdmin.from("ayah_assets").upsert(
-      { reel_id: data.reelId, ayah_number: data.ayahNumber, ornament_url: url },
-      { onConflict: "reel_id,ayah_number" },
-    );
-    return { url };
-  });
-
-export { STYLE_PROMPTS };
