@@ -10,6 +10,7 @@
  * may have minor join imperfections. v1 ships this; v2 can swap to harfbuzzjs.
  */
 import { createServerFn } from "@tanstack/react-start";
+import { getRequestHost } from "@tanstack/react-start/server";
 import opentype from "opentype.js";
 import { promises as fs } from "fs";
 import path from "path";
@@ -45,30 +46,47 @@ let cachedFont: opentype.Font | null = null;
 
 async function loadFont(): Promise<opentype.Font> {
   if (cachedFont) return cachedFont;
-  // public/ at runtime resolves from process cwd in worker bundle.
-  // Read the TTF directly from the filesystem (Worker has fs via nodejs_compat).
+  let buf: Uint8Array | null = null;
+
+  // 1) Local dev / Node SSR: read from public/ via fs
   const candidates = [
     path.resolve(process.cwd(), "public/fonts/AmiriQuran-Regular.ttf"),
     path.resolve("./public/fonts/AmiriQuran-Regular.ttf"),
   ];
-  let buf: Buffer | null = null;
   for (const p of candidates) {
     try {
-      buf = await fs.readFile(p);
+      const file = await fs.readFile(p);
+      buf = file;
       break;
     } catch {
       // try next
     }
   }
+
+  // 2) Worker production: fetch from same-origin /fonts/
   if (!buf) {
-    // Last resort: fetch from CDN (Cloudflare Workers can fetch over network).
-    const res = await fetch("https://github.com/google/fonts/raw/main/ofl/amiriquran/AmiriQuran-Regular.ttf");
-    if (!res.ok) throw new Error(`Could not load Amiri Quran font: ${res.status}`);
-    buf = Buffer.from(await res.arrayBuffer());
+    try {
+      const host = getRequestHost();
+      if (host) {
+        const proto = host.includes("localhost") ? "http" : "https";
+        const res = await fetch(`${proto}://${host}/fonts/AmiriQuran-Regular.ttf`);
+        if (res.ok) buf = new Uint8Array(await res.arrayBuffer());
+      }
+    } catch {
+      // fall through
+    }
   }
+
+  // 3) Last-resort CDN fallback
+  if (!buf) {
+    const res = await fetch("https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/amiriquran/AmiriQuran-Regular.ttf");
+    if (!res.ok) throw new Error(`Could not load Amiri Quran font: ${res.status}`);
+    buf = new Uint8Array(await res.arrayBuffer());
+  }
+
   // opentype.parse expects an ArrayBuffer
-  const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-  cachedFont = opentype.parse(ab as ArrayBuffer);
+  const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+  cachedFont = opentype.parse(ab);
   return cachedFont;
 }
 
