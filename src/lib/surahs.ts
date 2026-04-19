@@ -1,4 +1,4 @@
-/** Surah metadata (1-114). Used for surah picker + auto style suggestion. */
+/** Surah metadata (1-114). */
 export interface SurahMeta {
   number: number;
   nameArabic: string;
@@ -127,25 +127,4 @@ export const SURAHS: SurahMeta[] = [
 
 export function getSurah(number: number): SurahMeta | undefined {
   return SURAHS.find((s) => s.number === number);
-}
-
-export type ReelStyle = "calligraphic-bloom" | "liquid-light" | "sacred-geometry" | "celestial";
-
-export const STYLES: { id: ReelStyle; name: string; description: string; tagline: string }[] = [
-  { id: "calligraphic-bloom", name: "Calligraphic Bloom", description: "Ink on parchment, warm and intimate. Hand-painted ink washes bloom behind the verse like a master's reed pen meeting paper.", tagline: "warm · handmade · intimate" },
-  { id: "liquid-light", name: "Liquid Light", description: "Drifting volumetric light in indigo, amber, and cream. A24-cinematic, atmospheric, dreamlike.", tagline: "cinematic · atmospheric · ethereal" },
-  { id: "sacred-geometry", name: "Sacred Geometry", description: "Islamic geometric patterns — girih and 8-point stars — drawing in real-time over teal, gold, and ivory.", tagline: "geometric · ordered · contemplative" },
-  { id: "celestial", name: "Celestial", description: "Drifting stars and soft nebulae, midnight to dawn. For verses about creation, the heavens, light.", tagline: "cosmic · vast · luminous" },
-];
-
-/** Pick a default style based on the surah's character. */
-export function suggestStyle(surah: number): ReelStyle {
-  // Cosmos / creation / heavens
-  if ([67, 53, 55, 71, 78, 79, 81, 82, 84, 85, 86, 91, 100].includes(surah)) return "celestial";
-  // Light / mercy / nur themes
-  if ([24, 35, 39, 36].includes(surah)) return "liquid-light";
-  // Order / law / structure
-  if ([2, 3, 4, 5, 8, 9, 22, 33, 49].includes(surah)) return "sacred-geometry";
-  // Default — intimate, devotional
-  return "calligraphic-bloom";
 }
