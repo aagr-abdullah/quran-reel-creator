@@ -332,41 +332,58 @@ function AyahScene({ ayah, brief, amplitude }: { ayah: AyahData; brief: Creative
 }
 
 /**
- * Per-word stroke-by-stroke writing animation using SVG strokeDashoffset.
- * Each word is rendered as an SVG <path>; we ramp its dashoffset from
- * approxLength → 0 over the word's frame window. The word also gets a
- * filled "echo" that fades in at 70% to make the calligraphy feel solid.
+ * Per-word stroke-by-stroke writing animation.
+ * Tries SVG paths first; falls back to HTML+webfont per-letter fade if path
+ * data is invalid (empty paths, suspicious viewBox, zero widths).
  */
-function CalligraphySVG({
+function CalligraphyLayer({
   shaped,
   offsets,
   wordDurations,
   frame,
   palette,
+  amplitude,
 }: {
   shaped: ShapedAyahData;
   offsets: number[];
   wordDurations: number[];
   frame: number;
   palette: CreativeBrief["palette"];
+  amplitude: number;
 }) {
-  // The font path coords have y-up. opentype draws baseline at y=0 with
-  // negative y going up — so glyphs appear ABOVE the baseline.
-  // We need a viewBox that includes the ascender-to-descender range.
+  const words = shaped.words;
   const ascender = shaped.ascender;
   const descender = shaped.descender;
-  const totalH = ascender - descender; // descender is negative
-  const words = shaped.words;
-
-  // Lay words right-to-left across viewBox. Total width is sum of widths;
-  // position cursor from the right edge.
+  const totalH = ascender - descender;
   const totalW = shaped.totalWidth;
-  // padding so strokes don't clip
+
+  // Safety guards: detect bad SVG geometry → fall back to HTML
+  const svgInvalid =
+    totalW <= 0 ||
+    totalH <= 0 ||
+    totalH > 5000 ||
+    words.some((w) => !w.pathD || w.pathD.length < 4 || w.width <= 0);
+
+  if (svgInvalid) {
+    if (typeof window !== "undefined") {
+      console.warn("[CalligraphyLayer] SVG paths invalid, using HTML fallback", { totalW, totalH, words: words.length });
+    }
+    return (
+      <CalligraphyHTMLFallback
+        words={words}
+        offsets={offsets}
+        wordDurations={wordDurations}
+        frame={frame}
+        palette={palette}
+        amplitude={amplitude}
+      />
+    );
+  }
+
+  // Lay words right-to-left across viewBox.
   const pad = totalH * 0.15;
   const vbW = totalW + pad * 2;
   const vbH = totalH + pad * 2;
-  // Compose word positions: cursor starts at (totalW), each word occupies
-  // [cursor - width, cursor] then cursor -= width.
   let cursor = totalW;
   const wordX: number[] = words.map((w) => {
     const left = cursor - w.width;
@@ -374,28 +391,23 @@ function CalligraphySVG({
     return left;
   });
 
-  // viewBox: y axis flipped so font's negative-y ascender draws upward.
-  // Use transform on the inner <g> to translate baseline to (pad, pad+ascender)
-  // and flip y (scale(1,-1)).
-
   return (
     <div
       style={{
         position: "absolute",
-        top: "32%",
+        top: "30%",
         left: 70,
         right: 70,
         display: "flex",
         justifyContent: "center",
-        // scale entire SVG to fit width
       }}
     >
       <svg
         viewBox={`0 0 ${vbW} ${vbH}`}
-        style={{ width: "100%", height: "auto", overflow: "visible" }}
+        style={{ width: "100%", height: "auto", maxHeight: 720, overflow: "visible" }}
         xmlns="http://www.w3.org/2000/svg"
+        preserveAspectRatio="xMidYMid meet"
       >
-        {/* Drop shadow filter for ink */}
         <defs>
           <filter id="ink-shadow" x="-20%" y="-20%" width="140%" height="140%">
             <feGaussianBlur in="SourceAlpha" stdDeviation="3" />
@@ -403,8 +415,8 @@ function CalligraphySVG({
             <feComponentTransfer><feFuncA type="linear" slope="0.55" /></feComponentTransfer>
             <feMerge><feMergeNode /><feMergeNode in="SourceGraphic" /></feMerge>
           </filter>
-          <filter id="ink-glow" x="-30%" y="-30%" width="160%" height="160%">
-            <feGaussianBlur stdDeviation="4" result="b" />
+          <filter id="ink-glow" x="-40%" y="-40%" width="180%" height="180%">
+            <feGaussianBlur stdDeviation="6" result="b" />
             <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
           </filter>
         </defs>
@@ -412,33 +424,29 @@ function CalligraphySVG({
           {words.map((w, i) => {
             const wStart = offsets[i];
             const wDur = Math.max(8, wordDurations[i]);
-            // 0..1 progress over word window
             const p = Math.max(0, Math.min(1, (frame - wStart) / wDur));
-            // ease-out cubic for natural pen lift
             const ease = 1 - Math.pow(1 - p, 3);
             const dashOffset = (1 - ease) * w.approxLength;
-            // Fill fades in at 60% progress
-            const fillOp = Math.max(0, Math.min(1, (p - 0.6) / 0.35));
+            const fillOp = Math.max(0, Math.min(1, (p - 0.55) / 0.35));
             const isCurrent = frame >= wStart && frame < wStart + wDur;
-            const strokeColor = isCurrent ? palette.light : palette.light;
-            const fillColor = palette.light;
+            // Per-word amplitude reactivity: stroke pulses with the voice
+            const reactiveBoost = isCurrent ? amplitude * 1.6 : 0;
+            const strokeWidth = 3.5 + reactiveBoost;
             const glowFilter = isCurrent ? "url(#ink-glow)" : undefined;
 
             return (
               <g key={i} transform={`translate(${wordX[i]}, 0)`}>
-                {/* Filled glyph (fades in) */}
                 <path
                   d={w.pathD}
-                  fill={fillColor}
+                  fill={palette.light}
                   fillOpacity={fillOp * 0.95}
                   filter={glowFilter}
                 />
-                {/* Stroked outline reveal */}
                 <path
                   d={w.pathD}
                   fill="none"
-                  stroke={strokeColor}
-                  strokeWidth={3.5}
+                  stroke={palette.light}
+                  strokeWidth={strokeWidth}
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   strokeDasharray={w.approxLength}
@@ -450,6 +458,67 @@ function CalligraphySVG({
           })}
         </g>
       </svg>
+    </div>
+  );
+}
+
+/**
+ * HTML fallback: real Amiri Quran web font, words revealed by fade as their
+ * window opens. Not stroke-by-stroke, but always renders correct text.
+ */
+function CalligraphyHTMLFallback({
+  words,
+  offsets,
+  wordDurations,
+  frame,
+  palette,
+  amplitude,
+}: {
+  words: ShapedWord[];
+  offsets: number[];
+  wordDurations: number[];
+  frame: number;
+  palette: CreativeBrief["palette"];
+  amplitude: number;
+}) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: "28%",
+        left: 70,
+        right: 70,
+        textAlign: "center",
+        direction: "rtl",
+        fontFamily: "'Amiri Quran', 'Amiri', 'Scheherazade New', serif",
+        fontSize: 96,
+        lineHeight: 1.7,
+        color: palette.light,
+        textShadow: `0 0 18px ${hexAlpha(palette.accent, 0.5)}, 0 4px 14px ${hexAlpha(palette.shadow, 0.85)}`,
+        wordSpacing: 8,
+      }}
+    >
+      {words.map((w, i) => {
+        const wStart = offsets[i];
+        const wDur = Math.max(8, wordDurations[i]);
+        const p = Math.max(0, Math.min(1, (frame - wStart) / Math.max(8, wDur * 0.6)));
+        const isCurrent = frame >= wStart && frame < wStart + wDur;
+        const glow = isCurrent ? `0 0 ${24 + amplitude * 30}px ${hexAlpha(palette.accent, 0.7)}` : undefined;
+        return (
+          <span
+            key={i}
+            style={{
+              opacity: p,
+              transform: `translateY(${(1 - p) * 12}px)`,
+              display: "inline-block",
+              margin: "0 8px",
+              textShadow: glow,
+            }}
+          >
+            {w.text}
+          </span>
+        );
+      })}
     </div>
   );
 }
