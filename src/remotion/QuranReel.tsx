@@ -239,10 +239,11 @@ function AyahScene({ ayah, brief, amplitude }: { ayah: AyahData; brief: Creative
   const exit = interpolate(frame, [durationInFrames - 18, durationInFrames], [1, 0], { extrapolateLeft: "clamp" });
   const op = Math.min(enter, exit);
 
-  // Per-word offsets from char-weighted timing
+  // Per-word timing — uses Gemini alignment when present, char-weighted otherwise
   const words = ayah.shaped?.words ?? [];
-  const offsets = words.length ? wordFrameOffsets(words, durationInFrames) : [];
-  const wordDurations = offsets.map((o, i) => (offsets[i + 1] ?? durationInFrames - 12) - o);
+  const { offsets, durations: wordDurations } = words.length
+    ? wordFrameTiming(words, durationInFrames)
+    : { offsets: [] as number[], durations: [] as number[] };
 
   // Translation always visible, fades in over 14 frames
   const transOp = interpolate(frame, [0, 14], [0, 1], { extrapolateRight: "clamp" });
@@ -285,14 +286,15 @@ function AyahScene({ ayah, brief, amplitude }: { ayah: AyahData; brief: Creative
         <div style={{ height: 1, width: 160, background: `linear-gradient(90deg, transparent, ${palette.accent}, transparent)` }} />
       </div>
 
-      {/* Stroke-write calligraphy — SVG */}
+      {/* Stroke-write calligraphy — SVG with HTML fallback */}
       {ayah.shaped && words.length > 0 && (
-        <CalligraphySVG
+        <CalligraphyLayer
           shaped={ayah.shaped}
           offsets={offsets}
           wordDurations={wordDurations}
           frame={frame}
           palette={palette}
+          amplitude={amplitude}
         />
       )}
 
