@@ -7,12 +7,12 @@ import { uploadAudio } from "@/server/upload.functions";
 import { detectVerses, fetchVerses, type AyahPayload } from "@/server/detect.functions";
 import { detectMaqam, analyzeVerseMeaning } from "@/server/maqam.functions";
 import { generateSubstrate, generateAyahBackground } from "@/server/assets.functions";
+import { renderReel as renderReelFn, getRenderProgress } from "@/server/render.functions";
 import { SURAHS, STYLES, suggestStyle, type ReelStyle, getSurah } from "@/lib/surahs";
 import { Player, type PlayerRef } from "@remotion/player";
 import { QuranReel, REEL_FPS, REEL_W, REEL_H, totalDurationFrames, type AyahData, type ReelData } from "@/remotion/QuranReel";
-import { captureReel } from "@/lib/capture-reel";
 import { toast } from "sonner";
-import { Upload, Loader2, Wand2, Mic2, Sparkles, Check, Play, Download } from "lucide-react";
+import { Upload, Loader2, Wand2, Mic2, Sparkles, Check, Play, Download, Film } from "lucide-react";
 import { Toaster } from "sonner";
 
 export const Route = createFileRoute("/studio")({
@@ -25,7 +25,7 @@ export const Route = createFileRoute("/studio")({
   component: StudioPage,
 });
 
-type Phase = "idle" | "uploaded" | "detecting" | "detected" | "fetching" | "ready" | "analyzing" | "generating" | "preview" | "exporting";
+type Phase = "idle" | "uploaded" | "detecting" | "detected" | "fetching" | "ready" | "analyzing" | "generating" | "preview" | "rendering" | "rendered";
 
 interface DetectCandidate {
   surah: number;
@@ -42,6 +42,8 @@ function StudioPage() {
   const analyzeFn = useServerFn(analyzeVerseMeaning);
   const substrateFn = useServerFn(generateSubstrate);
   const bgFn = useServerFn(generateAyahBackground);
+  const renderFn = useServerFn(renderReelFn);
+  const progressFn = useServerFn(getRenderProgress);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -58,7 +60,9 @@ function StudioPage() {
   const [substrateUrl, setSubstrateUrl] = useState<string | null>(null);
   const [ayahAssets, setAyahAssets] = useState<Record<number, { backgroundUrl?: string; meaning?: { mood: string; imagery: string; concept: string; colorHint: string } }>>({});
   const [progress, setProgress] = useState<string>("");
-  const [exportProgress, setExportProgress] = useState<number>(0);
+  const [renderProgress, setRenderProgress] = useState<number>(0);
+  const [renderError, setRenderError] = useState<string | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
 
   const playerRef = useRef<PlayerRef>(null);
   const playerWrapRef = useRef<HTMLDivElement>(null);
@@ -222,41 +226,45 @@ function StudioPage() {
     }
   }, [reelId, audioUrl, verses, style, maqamFn, analyzeFn, substrateFn, bgFn]);
 
-  const onExport = useCallback(async () => {
-    if (!playerWrapRef.current || !reelData) return;
-    setPhase("exporting");
-    setExportProgress(0);
+  const onRender = useCallback(async () => {
+    if (!reelId || !reelData) return;
+    setPhase("rendering");
+    setRenderProgress(0);
+    setRenderError(null);
+    setVideoUrl(null);
     try {
-      // Find the audio element inside Remotion Player
-      const audioEl = playerWrapRef.current.querySelector("audio") as HTMLAudioElement | null;
-      if (!audioEl) {
-        toast.error("Could not locate audio for export. Press Play first.");
-        setPhase("preview");
-        return;
+      const { renderId, bucketName } = await renderFn({ data: { reelId, data: reelData } });
+      toast.message("Render queued on Lambda…", { description: "This usually takes 30–90s." });
+
+      // Poll progress every 2s
+      const pollEveryMs = 2000;
+      const start = Date.now();
+      const timeoutMs = 10 * 60 * 1000; // 10 min safety
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        if (Date.now() - start > timeoutMs) throw new Error("Render timed out");
+        await new Promise((r) => setTimeout(r, pollEveryMs));
+        const p = await progressFn({ data: { reelId, renderId, bucketName } });
+        setRenderProgress(p.progress);
+        if (p.error) {
+          setRenderError(p.error);
+          throw new Error(p.error);
+        }
+        if (p.done && p.videoUrl) {
+          setVideoUrl(p.videoUrl);
+          setPhase("rendered");
+          toast.success("Reel rendered — your MP4 is ready");
+          return;
+        }
       }
-      playerRef.current?.seekTo(0);
-      playerRef.current?.play();
-      const blob = await captureReel({
-        player: playerWrapRef.current,
-        audio: audioEl,
-        durationMs: (totalFrames / REEL_FPS) * 1000,
-        fps: REEL_FPS,
-        onProgress: (f) => setExportProgress(f),
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `quran-reel-${reelId}.webm`;
-      a.click();
-      URL.revokeObjectURL(url);
-      toast.success("Reel saved");
-      setPhase("preview");
     } catch (e) {
       console.error(e);
-      toast.error(e instanceof Error ? e.message : "Export failed");
+      const msg = e instanceof Error ? e.message : "Render failed";
+      setRenderError(msg);
+      toast.error(msg);
       setPhase("preview");
     }
-  }, [reelData, totalFrames, reelId]);
+  }, [reelId, reelData, renderFn, progressFn]);
 
   const surahMeta = getSurah(chosenSurah);
 
@@ -285,7 +293,7 @@ function StudioPage() {
 
           {/* Step 2 — detect */}
           {phase !== "idle" && (
-            <Card step={2} title="Confirm verses" done={phase === "ready" || phase === "analyzing" || phase === "generating" || phase === "preview" || phase === "exporting"}>
+            <Card step={2} title="Confirm verses" done={phase === "ready" || phase === "analyzing" || phase === "generating" || phase === "preview" || phase === "rendering" || phase === "rendered"}>
               {phase === "detecting" && <Loading text={progress} />}
               {transcription && (
                 <details className="mb-4 rounded-lg border border-border/40 bg-parchment-deep/30 p-3 text-sm">
@@ -371,8 +379,8 @@ function StudioPage() {
           )}
 
           {/* Step 3 — style */}
-          {(phase === "ready" || phase === "analyzing" || phase === "generating" || phase === "preview" || phase === "exporting") && (
-            <Card step={3} title="Choose your aesthetic" done={phase === "preview" || phase === "exporting" || phase === "generating" || phase === "analyzing"}>
+          {(phase === "ready" || phase === "analyzing" || phase === "generating" || phase === "preview" || phase === "rendering" || phase === "rendered") && (
+            <Card step={3} title="Choose your aesthetic" done={phase === "preview" || phase === "rendering" || phase === "rendered" || phase === "generating" || phase === "analyzing"}>
               <div className="grid grid-cols-2 gap-3">
                 {STYLES.map((s) => {
                   const sel = style === s.id;
@@ -396,26 +404,18 @@ function StudioPage() {
             </Card>
           )}
 
-          {/* Step 4 — generation progress / export */}
-          {(phase === "analyzing" || phase === "generating" || phase === "exporting") && (
+          {/* Step 4 — generation progress */}
+          {(phase === "analyzing" || phase === "generating") && (
             <Card step={4} title="Generating">
               <Loading text={progress || "Working…"} />
               {Object.keys(ayahAssets).length > 0 && (
                 <p className="mt-3 text-xs text-muted-foreground">{Object.keys(ayahAssets).length} of {verses.length} ayahs painted</p>
               )}
-              {phase === "exporting" && (
-                <div className="mt-4">
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-parchment-deep/60">
-                    <div className="h-full bg-gradient-to-r from-reed to-gold transition-[width]" style={{ width: `${exportProgress * 100}%` }} />
-                  </div>
-                  <p className="mt-2 text-center text-xs text-muted-foreground">{Math.round(exportProgress * 100)}% recorded</p>
-                </div>
-              )}
             </Card>
           )}
 
-          {phase === "preview" && (
-            <Card step={4} title="Save your reel">
+          {(phase === "preview" || phase === "rendering" || phase === "rendered") && (
+            <Card step={4} title="Render your MP4">
               {maqam && (
                 <div className="mb-4 rounded-lg border border-gold/30 bg-parchment-deep/30 p-4">
                   <div className="flex items-center justify-between">
@@ -432,12 +432,55 @@ function StudioPage() {
                   </div>
                 </div>
               )}
-              <Button onClick={onExport} className="illuminated h-12 w-full rounded-full px-7 text-base">
-                <Download className="mr-1 h-4 w-4" /> Save reel as video
-              </Button>
-              <p className="mt-3 text-center text-xs text-muted-foreground">
-                Recording captures the live preview. Keep this tab focused for best quality.
-              </p>
+
+              {phase === "preview" && (
+                <>
+                  <Button onClick={onRender} className="illuminated h-12 w-full rounded-full px-7 text-base">
+                    <Film className="mr-1 h-4 w-4" /> Render MP4 (1080×1920)
+                  </Button>
+                  <p className="mt-3 text-center text-xs text-muted-foreground">
+                    Renders frame-perfect on Remotion Lambda. Usually 30–90s.
+                  </p>
+                </>
+              )}
+
+              {phase === "rendering" && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3 rounded-lg border border-border/40 bg-parchment-deep/30 px-4 py-3 text-sm text-ink-soft">
+                    <Loader2 className="h-4 w-4 animate-spin text-reed" />
+                    <span>Rendering on Lambda… {Math.round(renderProgress * 100)}%</span>
+                  </div>
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-parchment-deep/60">
+                    <div className="h-full bg-gradient-to-r from-reed to-gold transition-[width]" style={{ width: `${renderProgress * 100}%` }} />
+                  </div>
+                </div>
+              )}
+
+              {phase === "rendered" && videoUrl && (
+                <div className="space-y-4">
+                  <video src={videoUrl} controls className="w-full rounded-lg border border-gold/30" />
+                  <a
+                    href={videoUrl}
+                    download={`quran-reel-${reelId}.mp4`}
+                    className="illuminated flex h-12 w-full items-center justify-center gap-2 rounded-full px-7 text-base font-medium"
+                  >
+                    <Download className="h-4 w-4" /> Download MP4
+                  </a>
+                  <Button
+                    variant="ghost"
+                    onClick={() => { setPhase("preview"); setVideoUrl(null); setRenderProgress(0); }}
+                    className="w-full"
+                  >
+                    Render again
+                  </Button>
+                </div>
+              )}
+
+              {renderError && phase !== "rendering" && (
+                <p className="mt-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+                  {renderError}
+                </p>
+              )}
             </Card>
           )}
         </div>
